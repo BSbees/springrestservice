@@ -46,5 +46,9 @@ public class Bookmark {
 	public String getDescription() {
 		return description;
 	}
+
+	public static Bookmark from(Account account, Bookmark bookmark) {
+		return new Bookmark(account, bookmark.URI, bookmark.getDescription());
+	}
 	
 }

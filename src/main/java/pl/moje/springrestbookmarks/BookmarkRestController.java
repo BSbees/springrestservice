@@ -1,14 +1,15 @@
 package pl.moje.springrestbookmarks;
 
-import static org.springframework.hateoas.mvc.ControllerLinkBuilder.*;
+import static org.springframework.hateoas.mvc.ControllerLinkBuilder.linkTo;
+import static org.springframework.hateoas.mvc.ControllerLinkBuilder.methodOn;
 
 import java.net.URI;
+import java.security.Principal;
+import java.util.List;
 import java.util.stream.Collectors;
 
 import org.springframework.hateoas.Link;
-import org.springframework.hateoas.MediaTypes;
 import org.springframework.hateoas.Resource;
-import org.springframework.hateoas.ResourceSupport;
 import org.springframework.hateoas.Resources;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,12 +19,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-// tag::code[]
 @RestController
 @RequestMapping("/bookmarks")
 class BookmarkRestController {
 
 	private final BookmarkRepository bookmarkRepository;
+
 	private final AccountRepository accountRepository;
 
 	BookmarkRestController(BookmarkRepository bookmarkRepository,
@@ -32,100 +33,66 @@ class BookmarkRestController {
 		this.accountRepository = accountRepository;
 	}
 
-	/**
-	 * Serve up a collection of links at the root URI for the client to consume.
-	 * @return
-	 */
-	@GetMapping(produces = MediaTypes.HAL_JSON_VALUE)
-	ResourceSupport root() {
-		ResourceSupport root = new ResourceSupport();
+	@GetMapping
+	Resources<Resource<Bookmark>> readBookmarks(Principal principal) {
+		this.validateUser(principal);
 
-		root.add(this.accountRepository.findAll().stream()
-			.map(account -> linkTo(methodOn(BookmarkRestController.class)
-				.readBookmarks(account.getUsername()))
-				.withRel(account.getUsername()))
-			.collect(Collectors.toList()));
+		List<Resource<Bookmark>> bookmarkResourceList = bookmarkRepository
+			.findByAccountUsername(principal.getName()).stream()
+			.map(bookmark -> toResource(bookmark, principal))
+			.collect(Collectors.toList());
 
-		return root;
+		return new Resources<>(bookmarkResourceList);
 	}
 
-	/**
-	 * Look up a collection of {@link Bookmark}s and transform then into a set of {@link Resources}.
-	 * 
-	 * @param userId
-	 * @return
-	 */
-	@GetMapping(value = "/{userId}", produces = MediaTypes.HAL_JSON_VALUE)
-	Resources<Resource<Bookmark>> readBookmarks(@PathVariable String userId) {
+	@PostMapping
+	ResponseEntity<?> add(Principal principal, @RequestBody Bookmark input) {
+		this.validateUser(principal);
 
-		this.validateUser(userId);
-
-		return new Resources<>(this.bookmarkRepository
-			.findByAccountUsername(userId).stream()
-			.map(bookmark -> toResource(bookmark, userId))
-			.collect(Collectors.toList()));
-	}
-
-	@PostMapping("/{userId}")
-	ResponseEntity<?> add(@PathVariable String userId, @RequestBody Bookmark input) {
-
-		this.validateUser(userId);
-
-		return this.accountRepository.findByUsername(userId)
+		return accountRepository
+			.findByUsername(principal.getName())
 			.map(account -> ResponseEntity.created(
-					URI.create(
-						toResource(
-							this.bookmarkRepository.save(Bookmark.from(account, input)), userId)
-								.getLink(Link.REL_SELF).getHref()))
+				URI.create(
+					toResource(
+						this.bookmarkRepository.save(Bookmark.from(account, input)), principal)
+						.getLink(Link.REL_SELF).getHref()))
 				.build())
 			.orElse(ResponseEntity.noContent().build());
 	}
 
-	/**
-	 * Find a single bookmark and transform it into a {@link Resource} of {@link Bookmark}s.
-	 * 
-	 * @param userId
-	 * @param bookmarkId
-	 * @return
-	 */
-	@GetMapping(value = "/{userId}/{bookmarkId}", produces = MediaTypes.HAL_JSON_VALUE)
-	Resource<Bookmark> readBookmark(@PathVariable String userId,
-								  @PathVariable Long bookmarkId) {
-		this.validateUser(userId);
+	@GetMapping("/{bookmarkId}")
+	Resource<Bookmark> readBookmark(Principal principal, @PathVariable Long bookmarkId) {
+		this.validateUser(principal);
 
 		return this.bookmarkRepository.findById(bookmarkId)
-			.map(bookmark -> toResource(bookmark, userId))
+			.map(bookmark -> toResource(bookmark, principal))
 			.orElseThrow(() -> new BookmarkNotFoundException(bookmarkId));
 	}
 
-	/**
-	 * Verify the {@literal userId} exists.
-	 * 
-	 * @param userId
-	 */
-	private void validateUser(String userId) {
+	private void validateUser(Principal principal) {
 		this.accountRepository
-			.findByUsername(userId)
-			.orElseThrow(() -> new UserNotFoundException(userId));
+			.findByUsername(principal.getName())
+			.orElseThrow(
+				() -> new UserNotFoundException(principal.getName()));
 	}
 
 	/**
 	 * Transform a {@link Bookmark} into a {@link Resource}.
-	 * 
+	 *
 	 * @param bookmark
-	 * @param userId
+	 * @param principal
 	 * @return
 	 */
-	private static Resource<Bookmark> toResource(Bookmark bookmark, String userId) {
+	private static Resource<Bookmark> toResource(Bookmark bookmark, Principal principal) {
 		return new Resource(bookmark,
 
 			// Create a raw link using a URI and a rel
 			new Link(bookmark.getURI(), "bookmark-uri"),
 
 			// Create a link to a the collection of bookmarks associated with the user
-			linkTo(methodOn(BookmarkRestController.class).readBookmarks(userId)).withRel("bookmarks"),
+			linkTo(methodOn(BookmarkRestController.class).readBookmarks(principal)).withRel("bookmarks"),
 
 			// Create a "self" link to a single bookmark
-			linkTo(methodOn(BookmarkRestController.class).readBookmark(userId, bookmark.getId())).withSelfRel());
+			linkTo(methodOn(BookmarkRestController.class).readBookmark(principal, bookmark.getId())).withSelfRel());
 	}
 }
